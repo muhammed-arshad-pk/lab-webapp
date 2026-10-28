@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WCN Virtual Lab</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='22' r='3' fill='%2338bdf8'/><path d='M8 15a11 11 0 0 1 16 0M4 10a17 17 0 0 1 24 0' stroke='%2338bdf8' stroke-width='3' fill='none' stroke-linecap='round'/></svg>">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <a class="brand" href="#/">
+      <svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><circle cx="16" cy="22" r="3" fill="currentColor"/><path d="M8 15a11 11 0 0 1 16 0M4 10a17 17 0 0 1 24 0" stroke="currentColor" stroke-width="3" fill="none" stroke-linecap="round"/></svg>
+      <span><b>WCN</b> Virtual Lab</span>
+    </a>
+    <nav id="nav"></nav>
+    <div class="side-foot">
+      <div id="backend-status" class="status off"><span class="dot"></span><span>Checking backend…</span></div>
+      <button id="theme-toggle" class="btn ghost small" type="button">Toggle theme</button>
+    </div>
+  </aside>
+  <div class="main">
+    <header class="topbar">
+      <button id="menu-btn" class="btn ghost small menu-btn" type="button" aria-label="Menu">☰</button>
+      <div id="crumbs" class="crumbs"></div>
+      <div class="clock" id="clock"></div>
+    </header>
+    <main id="view"></main>
+  </div>
+</div>
+<div id="tooltip" class="tooltip" hidden></div>
+<script src="js/core.js"></script>
+<script src="js/labs-signal.js"></script>
+<script src="js/labs-net.js"></script>
+<script src="js/labs-cisco.js"></script>
+<script>App.start();</script>
+</body>
+</html>
