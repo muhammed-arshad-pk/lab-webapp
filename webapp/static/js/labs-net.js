@@ -641,8 +641,8 @@ Reply  : OK / FAIL after the receiver checks the SHA-256 checksum</div>`,
           <div><b class="small">📱 Phone (client)</b><div class="stackviz" id="stB" style="margin-top:6px"></div></div>
         </div>
         <div class="grid2" style="margin-top:14px">
-          <div><div class="chatbox" id="chatA"></div><div class="row" style="margin-top:6px"><input type="text" id="inA" placeholder="Laptop says…" style="flex:1"><button class="btn small" id="sendA">Send</button></div></div>
-          <div><div class="chatbox" id="chatB"></div><div class="row" style="margin-top:6px"><input type="text" id="inB" placeholder="Phone says…" style="flex:1"><button class="btn small" id="sendB">Send</button></div></div>
+          <div><div class="chatbox" id="chatA"><div class="empty small" data-nolink>Chat opens after steps ①–④ above</div></div><div class="row" style="margin-top:6px"><input type="text" id="inA" placeholder="Laptop says…" style="flex:1"><button class="btn small" id="sendA">Send</button></div><div data-hint></div></div>
+          <div><div class="chatbox" id="chatB"><div class="empty small" data-nolink>Chat opens after steps ①–④ above</div></div><div class="row" style="margin-top:6px"><input type="text" id="inB" placeholder="Phone says…" style="flex:1"><button class="btn small" id="sendB">Send</button></div><div data-hint></div></div>
         </div>
         <div style="margin-top:14px"><b class="small">File transfer (phone → laptop)</b>
           <div class="row" style="margin-top:6px"><input type="file" id="bfile"><span id="fmeta" class="small muted"></span></div>
@@ -672,7 +672,7 @@ python bluetooth\\device_info.py                  python bluetooth\\device_info.
       1: async () => { blog("Phone: HCI_Inquiry (GIAC, 10.24 s)…"); for (let i = 0; i < 4; i++) { doHop(); await sleep(120); } blog("  found 'WCN-Laptop' 3C:A9:F4:12:34:56  class=Computer"); },
       2: async () => { blog("Phone: HCI_Create_Connection → 3C:A9:F4:12:34:56 (paging)"); await travel("#stB", "#stA", "PAGE"); blog("  ACL link up, role = central"); },
       3: async () => { blog("Phone: SDP ServiceSearchAttributeRequest UUID 0x1101 (Serial Port)"); await travel("#stB", "#stA", "SDP req"); await travel("#stA", "#stB", "SDP rsp"); blog("  → Serial Port service on RFCOMM channel 4"); },
-      4: async () => { blog("Phone: L2CAP connect PSM 0x0003 → RFCOMM SABM ch 4"); await travel("#stB", "#stA", "SABM"); await travel("#stA", "#stB", "UA"); blog("  RFCOMM channel 4 OPEN. Chat ready.", ""); $("#link", body).className = "chip ok"; $("#link", body).textContent = "RFCOMM ch 4 open"; },
+      4: async () => { blog("Phone: L2CAP connect PSM 0x0003 → RFCOMM SABM ch 4"); await travel("#stB", "#stA", "SABM"); await travel("#stA", "#stB", "UA"); blog("  RFCOMM channel 4 OPEN. Chat ready.", ""); $("#link", body).className = "chip ok"; $("#link", body).textContent = "RFCOMM ch 4 open"; $$("[data-nolink], [data-hint] > *", body).forEach(e => e.remove()); },
     };
     $$("[data-step]", body).forEach(b => b.onclick = async () => {
       const n = +b.dataset.step;
@@ -681,10 +681,16 @@ python bluetooth\\device_info.py                  python bluetooth\\device_info.
       const nx = $(`[data-step="${n + 1}"]`, body); if (nx) nx.classList.remove("ghost");
     });
     const bubble = (box, me, text, who) => { const c = $(box, body); c.insertAdjacentHTML("beforeend", `<div class="msg ${me ? "me" : "them"}"><small>${who} · ${new Date().toLocaleTimeString()}</small>${esc(text)}</div>`); c.scrollTop = c.scrollHeight; };
+    function needLink(hint) {          // explain, next to the box the user is using, why nothing was sent
+      const next = $(`[data-step="${step + 1}"]`, body);
+      hint.innerHTML = `<div class="alert warn" style="margin:6px 0 0">No Bluetooth link yet, so the message cannot be sent. Click <b>${esc(next.textContent)}</b>${step < 3 ? ", then the next steps up to <b>④ Open RFCOMM ch 4</b>" : ""}, then send again. Your text is kept.</div>`;
+      next.classList.add("pulse"); setTimeout(() => next.classList.remove("pulse"), 3000);
+      blog("Open the RFCOMM channel first (steps ①–④).", "err");
+    }
     async function chat(side) {
       const inp = $(side === "A" ? "#inA" : "#inB", body), text = inp.value.trim();
       if (!text) return;
-      if (step < 4) { blog("Open the RFCOMM channel first (steps ①–④).", "err"); return; }
+      if (step < 4) return needLink($("[data-hint]", inp.closest(".row").parentElement));
       inp.value = "";
       const [me, them, fs, ts, nm] = side === "A" ? ["#chatA", "#chatB", "#stA", "#stB", "Laptop"] : ["#chatB", "#chatA", "#stB", "#stA", "Phone"];
       bubble(me, true, text, "You"); blog(`${nm} → RFCOMM UIH ${text.length + 1} B`);
@@ -695,7 +701,7 @@ python bluetooth\\device_info.py                  python bluetooth\\device_info.
     const sha = async buf => crypto.subtle ? [...new Uint8Array(await crypto.subtle.digest("SHA-256", buf))].map(b => b.toString(16).padStart(2, "0")).join("") : "(SHA-256 needs https or localhost)";
     $("#bfile", body).onchange = async e => {
       const f = e.target.files[0]; if (!f) return;
-      if (step < 4) { blog("Open the RFCOMM channel first (steps ①–④).", "err"); e.target.value = ""; return; }
+      if (step < 4) { needLink($("#fres", body)); e.target.value = ""; return; }
       const buf = await f.arrayBuffer(), h = await sha(buf), chunks = Math.ceil(buf.byteLength / 4096) || 1, t0 = performance.now();
       $("#fmeta", body).textContent = `${f.name} · ${buf.byteLength} bytes · ${chunks} chunks of 4096 B`;
       blog(`Phone → header {"name":"${f.name}","size":${buf.byteLength},"sha256":"${h.slice(0, 16)}…"}`);

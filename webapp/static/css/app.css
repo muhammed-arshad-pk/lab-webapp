@@ -238,6 +238,8 @@ details.viva div { margin-top: 8px; color: var(--muted); }
 .msg small { display: block; color: var(--muted); font-size: .68rem; }
 .progress { height: 10px; background: var(--panel2); border-radius: 5px; overflow: hidden; border: 1px solid var(--line); }
 .progress i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); width: 0; transition: width .1s; }
+.btn.pulse { animation: pulse 0.6s ease-in-out 5; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--warn) 55%, transparent); transform: scale(1.06); } }
 .empty { color: var(--muted); text-align: center; padding: 24px; font-size: .85rem; }
 .muted { color: var(--muted); }
 .small { font-size: .8rem; }
