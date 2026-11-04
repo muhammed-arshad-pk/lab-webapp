@@ -3,7 +3,6 @@
 
 App.group("signals", "Signals &amp; Modulation");
 App.group("net", "Wireless Networking");
-App.group("cisco", "Cisco Networking");
 
 const TAU = 2 * Math.PI;
 function erfc(x) {

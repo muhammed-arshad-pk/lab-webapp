@@ -33,7 +33,6 @@ Each lab in the web app has five tabs:
 | 8 | 802.11 beacon frame analyser | `beacon_analyzer/beacon_analyzer.py` |
 | 9 | TCP & UDP client–server | `tcp_udp_comm/` |
 | 10 | Bluetooth discovery, info, chat & file transfer | `bluetooth/` |
-| C | Cisco Packet Tracer labs | coming soon |
 
 Each `short/` folder contains a condensed version of the same program.
 
