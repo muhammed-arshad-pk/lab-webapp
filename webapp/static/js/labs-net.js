@@ -1,7 +1,7 @@
 /* WCN Virtual Lab - networking labs: WiFi scanner, WLAN security, Beacon analyser, TCP/UDP, Bluetooth */
 "use strict";
 
-const modeChip = live => live ? `<span class="chip ok">● LIVE: real hardware</span>` : `<span class="chip warn">DEMO DATA: lab server offline</span>`;
+const modeChip = live => live ? `<span class="chip ok">● LIVE: real hardware</span>` : "";
 const sigColor = dbm => dbm >= -50 ? "var(--ok)" : dbm >= -60 ? "var(--c3)" : dbm >= -70 ? "var(--warn)" : dbm >= -80 ? "var(--c6)" : "var(--bad)";
 const qualityOf = dbm => dbm >= -50 ? "Excellent" : dbm >= -60 ? "Good" : dbm >= -70 ? "Fair" : dbm >= -80 ? "Weak" : "Very Weak";
 const pctOf = dbm => Math.max(0, Math.min(100, 2 * (dbm + 100)));
@@ -408,7 +408,6 @@ App.register({
     const S = { sproto: "TCP", sport: 5000, cproto: "TCP", host: "127.0.0.1", cport: 5000, msg: "Hello from client" };
     let sid = null, since = 0, poll = 0, arrows = [], rtts = [], hs = [], running = new Set(), sim = !App.backend, simSrvLog = [];
     body.innerHTML = `
-      ${sim ? `<div class="alert warn">Lab server offline: this is an in-browser simulation. Run <code>python webapp\\server.py</code> to use real sockets.</div>` : ""}
       <div class="grid2">
         <div class="panel"><h3>🖥 Server <span class="spacer"></span><span id="sstate" class="chip muted">stopped</span></h3>
           <div class="controls">${UI.select("sproto", "Protocol", ["TCP", "UDP"])}<label class="ctl"><span class="lbl">Port</span><input type="number" data-k="sport" min="1024" max="65535"></label></div>
@@ -589,9 +588,7 @@ Reply  : OK / FAIL after the receiver checks the SHA-256 checksum</div>`,
     body.innerHTML = `
       <div class="panel"><h3>1 · Device discovery (inquiry scan) <span class="spacer"></span><span id="mode"></span></h3>
         <div class="row"><button class="btn" id="bscan">🔍 Scan</button><div style="width:220px">${UI.slider("timeout", "Scan time", 2, 15, 1, "s")}</div>
-          <button class="btn ghost" id="wble" hidden>🔗 Connect a real BLE device (Web Bluetooth)</button><span id="bmeta" class="muted small"></span></div>
-        ${App.backend ? "" : `<p class="small muted" style="margin:8px 0 0">Without the lab server, <b>Scan</b> shows demo devices. <b>Web Bluetooth</b> (Chrome / Edge) uses your real Bluetooth radio straight from the browser: pick a nearby BLE device and read its GATT services.</p>`}
-        <div class="tbl-wrap" id="bdev" style="margin-top:12px"><div class="empty">Press Scan to discover nearby Bluetooth devices.</div></div></div>
+          <button class="btn ghost" id="wble" hidden>🔗 Connect a real BLE device (Web Bluetooth)</button><span id="bmeta" class="muted small"></span></div>        <div class="tbl-wrap" id="bdev" style="margin-top:12px"><div class="empty">Press Scan to discover nearby Bluetooth devices.</div></div></div>
       <div class="panel" id="binfo" hidden><h3>2 · Device information &amp; services</h3><div id="binfo-body"></div></div>
       <div class="panel"><h3>3 · Piconet simulator: RFCOMM chat &amp; file transfer</h3>
         <div class="row" style="margin-bottom:12px">

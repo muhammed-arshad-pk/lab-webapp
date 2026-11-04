@@ -349,7 +349,7 @@ const App = {
   register(lab) { this.labs.push(lab); },
 
   async api(path, opts = {}) {
-    if (!this.backend) throw new Error("Backend not running - start it with:  python webapp\\server.py");
+    if (!this.backend) throw new Error("This feature is not available here.");
     const init = { method: opts.method || (opts.body !== undefined ? "POST" : "GET"), headers: {} };
     if (opts.body !== undefined) {
       if (opts.raw) init.body = opts.body;
@@ -431,14 +431,14 @@ const App = {
       <section class="hero">
         <h1>Wireless Communication &amp; Networks: Virtual Lab</h1>
         <p>Every experiment from the WCN course in one place. Turn the knobs on the signal labs and watch the waveforms,
-        spectra and constellations change as you go. The networking labs talk to your real WiFi adapter, Bluetooth radio and sockets
-        through the lab server, and every lab can run the original Python program and show its console output and plots.</p>
+        spectra and constellations change as you go. Explore WiFi, WLAN security, beacon frames, TCP/UDP and Bluetooth hands-on,
+        and run the original Python program of every lab to see its console output and plots.</p>
         <div class="row" style="margin-top:14px">
           ${st ? `<span class="chip ok">Lab server online</span><span class="chip muted">${esc(st.os)} · Python ${esc(st.python)}</span>
             <span class="chip ${st.scapy ? "ok" : "warn"}">scapy ${st.scapy ? "✓" : "✗"}</span>
             <span class="chip ${st.bleak ? "ok" : "warn"}">bleak ${st.bleak ? "✓" : "✗"}</span>
             <span class="chip ${st.matplotlib ? "ok" : "warn"}">matplotlib ${st.matplotlib ? "✓" : "✗"}</span>`
-        : `<span class="chip ok">Browser mode</span><span class="muted small">Simulations, source code and the Python programs all run on this page. Laptop-only extras (live WiFi scan, WLAN report, real TCP/UDP sockets): run <code>python webapp\\server.py</code> locally.</span>`}
+        : ""}
         </div>
       </section>
       ${this.groups.map(g => `<h2>${g.title}</h2><div class="cards">${this.labs.filter(l => l.group === g.id).map(l => `
