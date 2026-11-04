@@ -71,8 +71,9 @@ Carson's rule: BW ≈ 2(β + 1) fm</div>
     ["How is PM related to FM?", "FM of m(t) equals PM of ∫m(t)dt, and PM of m(t) equals FM of dm/dt. Both are angle modulation."],
     ["Why is FM less affected by noise than AM?", "Noise mostly disturbs amplitude. FM carries information in frequency, and a limiter removes amplitude variations before detection."]],
   experiment(body) {
-    const S = { Am: 1, fm: 5, Ac: 1, fc: 50, ka: 0.8, kf: 30, kp: 1.5708, win: 1, view: "time", env: false, live: false, t0: 0 };
+    const S = { wave: "sine", Am: 1, fm: 5, Ac: 1, fc: 50, ka: 0.8, kf: 30, kp: 1.5708, win: 1, view: "time", ref: true, env: false, live: false, t0: 0 };
     const right = labLayout(body, `
+      ${UI.select("wave", "Message waveform", [["sine", "Sine"], ["square", "Square (shows phase jumps)"], ["triangle", "Triangle"], ["saw", "Sawtooth"]])}
       ${UI.slider("Am", "Message amplitude A<sub>m</sub>", 0.1, 2, 0.05)}
       ${UI.slider("fm", "Message frequency f<sub>m</sub>", 1, 20, 1, "Hz")}
       ${UI.slider("Ac", "Carrier amplitude A<sub>c</sub>", 0.5, 2, 0.05)}
@@ -82,36 +83,57 @@ Carson's rule: BW ≈ 2(β + 1) fm</div>
       ${UI.slider("kp", "PM deviation k<sub>p</sub>", 0.1, 6.28, 0.05, "rad/V")}
       ${UI.slider("win", "Scope time window", 0.1, 1, 0.05, "s")}
       ${UI.select("view", "Instrument", [["time", "Oscilloscope (time domain)"], ["freq", "Spectrum analyser"]])}
-      <div class="row">${UI.check("env", "Envelope detector")} ${UI.check("live", "Live scope (run)")}</div>`);
+      <div class="row">${UI.check("ref", "Carrier reference on FM/PM")} ${UI.check("env", "Envelope detector")} ${UI.check("live", "Live scope (run)")}</div>`);
     const warn = document.createElement("div"); right.appendChild(warn);
     const pp = panel(right, "Waveforms", "plots");
     const names = ["Message m(t)", "Carrier c(t)", "AM signal", "FM signal", "PM signal"];
     const P = names.map(n => new Plot(pp, { height: 150, title: `<b>${n}</b>` }));
+    const phPlot = new Plot(pp, { height: 150, title: `<b>PM phase deviation φ(t)</b> ${legend([["--c4", "expected kₚ·m(t)"], ["--c7", "measured from the PM signal (phase detector)"]])}` });
     const envPlot = new Plot(pp, { height: 150, title: `<b>Envelope detector output</b> ${legend([["--c1", "original message"], ["--c3", "recovered"]])}` });
     const fsA = 8192;
 
     const update = () => {
       const { Am, fm, Ac, fc, ka, kf, kp, t0 } = S, mu = ka * Am, beta = kf * Am / fm;
       const n = fsA, t = DSP.range(n, i => t0 + i / fsA);
-      const msg = t.map(x => Am * Math.sin(TAU * fm * x));
+      const shape = { sine: p => Math.sin(TAU * p), square: p => p % 1 < 0.5 ? 1 : -1, triangle: p => 1 - 4 * Math.abs((p + 0.25) % 1 - 0.5), saw: p => 2 * ((p + 0.5) % 1) - 1 }[S.wave];
+      const msg = t.map(x => Am * shape(fm * x));
       const car = t.map(x => Ac * Math.sin(TAU * fc * x));
       const am = t.map((x, i) => Ac * (1 + ka * msg[i]) * Math.sin(TAU * fc * x));
-      const fmS = t.map(x => Ac * Math.sin(TAU * fc * x + beta * (1 - Math.cos(TAU * fm * x))));
+      let acc = 0;                                   // FM phase = 2π kf ∫m dt (cumsum, as in the Python program)
+      const fmS = t.map((x, i) => { acc += msg[i] / fsA; return Ac * Math.sin(TAU * fc * x + TAU * kf * acc); });
       const pm = t.map((x, i) => Ac * Math.sin(TAU * fc * x + kp * msg[i]));
       const sigs = [msg, car, am, fmS, pm], cols = ["--c1", "--c3", "--c8", "--c5", "--c7"].map(cssVar);
 
       envPlot.el.style.display = S.env && S.view === "time" ? "" : "none";
+      phPlot.el.style.display = S.view === "time" ? "" : "none";
       if (S.view === "time") {
         const m = Math.round(S.win * fsA), tx = t.slice(0, m);
         const A = Ac * (1 + ka * Am) * 1.15;
         P.forEach((p, k) => {
-          const series = [{ x: tx, y: sigs[k].slice(0, m), color: cols[k], width: 1.1, label: names[k] }];
+          const series = [];
+          if (S.ref && (k === 3 || k === 4)) series.push({ x: tx, y: car.slice(0, m), color: cssVar("--muted"), dash: [3, 3], width: 1, alpha: .7, label: "carrier (reference)" });
+          series.push({ x: tx, y: sigs[k].slice(0, m), color: cols[k], width: 1.3, label: names[k] });
           if (k === 2) {
             series.push({ x: tx, y: msg.slice(0, m).map(v => Ac * (1 + ka * v)), color: cssVar("--muted"), dash: [4, 3], width: 1, label: "envelope" });
             series.push({ x: tx, y: msg.slice(0, m).map(v => -Ac * (1 + ka * v)), color: cssVar("--muted"), dash: [4, 3], width: 1, noHover: true });
           }
-          p.draw({ series, xlim: [tx[0], tx[m - 1]], ylim: k === 0 ? [-2.1, 2.1] : [-Math.max(A, Ac * 1.15), Math.max(A, Ac * 1.15)], xname: "t (s)", xlabel: k === 4 ? "Time (s)" : "" });
+          p.draw({ series, xlim: [tx[0], tx[m - 1]], ylim: k === 0 ? [-2.1, 2.1] : [-Math.max(A, Ac * 1.15), Math.max(A, Ac * 1.15)], xname: "t (s)" });
         });
+        // phase detector: mix PM with sin/cos of the carrier, low-pass over one carrier period, φ = atan2(Q, I)
+        const w = Math.max(1, Math.round(fsA / fc)), pI = [0], pQ = [0];
+        for (let i = 0; i < n; i++) { pI.push(pI[i] + pm[i] * Math.sin(TAU * fc * t[i])); pQ.push(pQ[i] + pm[i] * Math.cos(TAU * fc * t[i])); }
+        let prev = 0;
+        const ph = DSP.range(m, i => {
+          const a = Math.max(0, Math.min(n - w, i - (w >> 1))), b = a + w;
+          let v = Math.atan2(pQ[b] - pQ[a], pI[b] - pI[a]);
+          while (v - prev > Math.PI) v -= TAU;              // unwrap
+          while (v - prev < -Math.PI) v += TAU;
+          return (prev = v);
+        });
+        const lim = Math.max(kp * Am, 0.5) * 1.3;
+        phPlot.draw({ series: [{ x: tx, y: msg.slice(0, m).map(v => kp * v), color: cssVar("--c4"), width: 2.2, label: "kp·m(t)" }, { x: tx, y: ph, color: cssVar("--c7"), width: 1.3, dash: [5, 3], label: "measured φ" }], xlim: [tx[0], tx[m - 1]], ylim: [-lim, lim], xname: "t (s)", xlabel: "Time (s)    (y: phase in rad)" });
+        P[4].setTitle(`<b>PM signal</b> <span class="muted">phase = 2πf<sub>c</sub>t + k<sub>p</sub>·m(t): it leads the dashed carrier when m(t) &gt; 0 and lags it when m(t) &lt; 0${S.wave === "square" ? `; jumps by ${fmt(2 * kp * Am)} rad at every edge` : ""}</span>`);
+        P[3].setTitle(`<b>FM signal</b> <span class="muted">frequency = f<sub>c</sub> + k<sub>f</sub>·m(t): compressed when m(t) &gt; 0, stretched when m(t) &lt; 0</span>`);
         if (S.env) {      // rectifier + moving-average low-pass (one carrier period)
           const w = Math.max(1, Math.round(fsA / fc)), pre = [0];
           for (let i = 0; i < n; i++) pre.push(pre[i] + Math.abs(am[i]));
@@ -147,7 +169,7 @@ Carson's rule: BW ≈ 2(β + 1) fm</div>
       raf = requestAnimationFrame(loop);
     };
     update();
-    return () => { S.live = false; cancelAnimationFrame(raf); [...P, envPlot].forEach(p => p.destroy()); };
+    return () => { S.live = false; cancelAnimationFrame(raf); [...P, phPlot, envPlot].forEach(p => p.destroy()); };
   },
 });
 
