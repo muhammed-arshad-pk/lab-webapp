@@ -12,6 +12,22 @@ Then open http://localhost:8000 (on Windows you can also double-click `webapp/st
 
 The server uses only the Python standard library. The labs themselves use the packages listed below.
 
+### Without the server (Vercel / any static host)
+
+`webapp/static` is a self-contained static site, deployed with `vercel.json`:
+- **Signal labs:** fully interactive, and **Run Program** runs the original Python in the browser (Pyodide + NumPy + Matplotlib).
+- **Beacon analyser:** reads pcap / pcapng files in the browser.
+- **Bluetooth:** connects to real BLE devices with Web Bluetooth (Chrome / Edge).
+- **Source Code tab:** works on every lab.
+
+Only the live WiFi scan, the WLAN report and the real TCP/UDP sockets need the local server.
+
+The site uses copies of the programs in `webapp/static/programs/`. After changing any lab program, refresh the copies with:
+
+```bash
+python webapp/bundle.py
+```
+
 Each lab in the web app has five tabs:
 - **Experiment**: an interactive simulation, or real hardware for the networking labs.
 - **Aim & Theory**: aim, theory, procedure and result.

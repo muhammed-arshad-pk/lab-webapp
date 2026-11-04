@@ -78,7 +78,10 @@ def security_of(pkt, elements):
     rsn = next((info for eid, info in elements if eid == ELT_RSN), None)
     wpa = next((info[4:] for eid, info in elements
                 if eid == ELT_VENDOR and info[:4] == b"\x00\x50\xf2\x01"), None)
-    privacy = bool(int(pkt[Dot11Beacon].cap) & 0x0010)   # Privacy bit
+    # Capability Info is little-endian on the air, but scapy's 'cap' field reads
+    # it big-endian, so take the Privacy bit (0x0010) from the raw bytes.
+    cap = int.from_bytes(bytes(pkt[Dot11Beacon])[10:12], "little")
+    privacy = bool(cap & 0x0010)
 
     if rsn is not None:
         group, pairwise, akm = parse_suites(rsn)

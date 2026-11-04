@@ -1,0 +1,3 @@
+bleak
+winrt-Windows.Devices.Bluetooth.Rfcomm; sys_platform == "win32"
+pybluez2; sys_platform == "linux"

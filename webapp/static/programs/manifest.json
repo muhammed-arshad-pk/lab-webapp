@@ -1,0 +1,90 @@
+{
+ "analog": {
+  "files": [
+   "analog_modulation/analog_modulation.py"
+  ],
+  "run": "analog_modulation/analog_modulation.py",
+  "args": []
+ },
+ "digital": {
+  "files": [
+   "digital_modulation/digital_modulation.py"
+  ],
+  "run": "digital_modulation/digital_modulation.py",
+  "args": []
+ },
+ "pcm": {
+  "files": [
+   "pcm/pcm.py"
+  ],
+  "run": "pcm/pcm.py",
+  "args": []
+ },
+ "ofdm": {
+  "files": [
+   "ofdm/ofdm.py"
+  ],
+  "run": "ofdm/ofdm.py",
+  "args": []
+ },
+ "cdma": {
+  "files": [
+   "cdma/cdma.py"
+  ],
+  "run": "cdma/cdma.py",
+  "args": []
+ },
+ "wifi": {
+  "files": [
+   "wifi_analyzer.py"
+  ],
+  "run": "wifi_analyzer.py",
+  "args": []
+ },
+ "wlan": {
+  "files": [
+   "wlan_security/wlan_security_report.py",
+   "wlan_security/short/wlan_security.py"
+  ],
+  "run": "wlan_security/wlan_security_report.py",
+  "args": []
+ },
+ "beacon": {
+  "files": [
+   "beacon_analyzer/beacon_analyzer.py",
+   "beacon_analyzer/create_sample_pcap.py",
+   "beacon_analyzer/short/beacon.py"
+  ],
+  "run": "beacon_analyzer/beacon_analyzer.py",
+  "args": [
+   "--pcap",
+   "beacon_analyzer/sample_beacons.pcap"
+  ]
+ },
+ "tcpudp": {
+  "files": [
+   "tcp_udp_comm/server/tcp_server.py",
+   "tcp_udp_comm/client/tcp_client.py",
+   "tcp_udp_comm/server/udp_server.py",
+   "tcp_udp_comm/client/udp_client.py"
+  ],
+  "run": null,
+  "args": []
+ },
+ "bluetooth": {
+  "files": [
+   "bluetooth/discover_devices.py",
+   "bluetooth/device_info.py",
+   "bluetooth/chat/chat_server.py",
+   "bluetooth/chat/chat_client.py",
+   "bluetooth/file_transfer/file_sender.py",
+   "bluetooth/file_transfer/file_receiver.py",
+   "bluetooth/short/bluetooth_all.py"
+  ],
+  "run": "bluetooth/discover_devices.py",
+  "args": [
+   "--timeout",
+   "6"
+  ]
+ }
+}

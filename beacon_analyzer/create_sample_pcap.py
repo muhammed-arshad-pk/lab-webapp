@@ -54,6 +54,8 @@ APS = [
 
 def beacon(ssid, bssid, ch, interval, privacy, rates, ext, sec, dbm, ts):
     cap = 0x0401 | (0x0010 if privacy else 0)             # ESS + short slot (+Privacy)
+    # scapy packs 'cap' big-endian; byte-swap so the frame is little-endian like real APs
+    cap = int.from_bytes(cap.to_bytes(2, "little"), "big")
     freq = 2407 + 5 * ch if ch <= 13 else 5000 + 5 * ch
     pkt = (RadioTap(present="Flags+Channel+dBm_AntSignal", Flags=0,
                     ChannelFrequency=freq,

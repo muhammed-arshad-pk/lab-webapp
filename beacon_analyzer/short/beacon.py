@@ -7,7 +7,7 @@ def show(p):
     if p.haslayer(Dot11Beacon) and p.addr3 not in seen:
         seen.add(p.addr3)
         s = p[Dot11Beacon].network_stats()
-        if s["crypto"] == {"OPN"} and int(p.cap) & 0x10: s["crypto"] = {"WEP"}
+        if s["crypto"] == {"OPN"} and bytes(p[Dot11Beacon])[10] & 0x10: s["crypto"] = {"WEP"}  # Privacy bit (LE)
         print(f"\nAP: {s['ssid']} ({p.addr3})\nChannel: {s.get('channel')}\n"
               f"Security: {', '.join(s['crypto'])}\nRates: {s.get('rates')} Mbps\n"
               f"Interval: {p.beacon_interval} TU")

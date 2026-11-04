@@ -290,6 +290,52 @@ function highlightPy(code) {
 }
 
 /* =====================================================================
+ * PyRunner - runs the original lab programs in the browser (Pyodide)
+ * ===================================================================== */
+const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/";
+const toB64 = u8 => { let s = ""; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
+
+const PyRunner = {
+  ready: null,
+  load(status) {
+    if (!this.ready) this.ready = (async () => {
+      status("Downloading Python (Pyodide) - first run only…");
+      await new Promise((ok, fail) => {
+        const s = document.createElement("script");
+        s.src = PYODIDE + "pyodide.js"; s.onload = ok;
+        s.onerror = () => fail(new Error("Could not download Pyodide - an internet connection is needed for the first run."));
+        document.head.appendChild(s);
+      });
+      const py = await loadPyodide({ indexURL: PYODIDE });
+      status("Loading NumPy and Matplotlib…");
+      await py.loadPackage(["numpy", "matplotlib"]);
+      return py;
+    })().catch(e => { this.ready = null; throw e; });
+    return this.ready;
+  },
+  async run(script, status) {
+    const py = await this.load(status);
+    const code = await (await fetch("programs/" + script)).text();
+    let out = "", err = "", rc = 0;
+    py.setStdout({ batched: s => { out += s + "\n"; } });
+    py.setStderr({ batched: s => { err += s + "\n"; } });
+    status("Running…");
+    const t0 = performance.now();
+    await py.runPythonAsync([
+      "import os, warnings, matplotlib", 'matplotlib.use("Agg")', "import matplotlib.pyplot as plt",
+      'plt.close("all")', 'warnings.filterwarnings("ignore")',
+      'os.makedirs("/lab", exist_ok=True)', 'os.chdir("/lab")', "for _f in os.listdir('.'): os.remove(_f)"].join("\n"));
+    const g = py.globals.get("dict")();
+    g.set("__name__", "__main__");
+    try { await py.runPythonAsync(code, { globals: g }); }
+    catch (e) { err += e.message; rc = 1; }
+    finally { g.destroy(); }
+    const images = py.FS.readdir("/lab").filter(f => f.endsWith(".png")).map(f => ({ name: f, data: toB64(py.FS.readFile("/lab/" + f)) }));
+    return { command: "python " + script.replaceAll("/", "\\"), stdout: out, stderr: err, returncode: rc, seconds: ((performance.now() - t0) / 1000).toFixed(2), images };
+  },
+};
+
+/* =====================================================================
  * App: registry, router, lab page shell
  * ===================================================================== */
 const App = {
@@ -354,8 +400,8 @@ const App = {
       st.lastElementChild.textContent = `Lab server online · ${this.status.host} (${this.status.ip})`;
     } catch {
       this.backend = false;
-      st.className = "status off";
-      st.lastElementChild.textContent = "Offline - simulations only";
+      st.className = "status on";
+      st.lastElementChild.textContent = "Browser mode · everything runs on this page";
     }
   },
 
@@ -392,7 +438,7 @@ const App = {
             <span class="chip ${st.scapy ? "ok" : "warn"}">scapy ${st.scapy ? "✓" : "✗"}</span>
             <span class="chip ${st.bleak ? "ok" : "warn"}">bleak ${st.bleak ? "✓" : "✗"}</span>
             <span class="chip ${st.matplotlib ? "ok" : "warn"}">matplotlib ${st.matplotlib ? "✓" : "✗"}</span>`
-        : `<span class="chip warn">Lab server offline</span><span class="muted small">Simulations work. For real hardware labs run <code>python webapp\\server.py</code> and open http://localhost:8000</span>`}
+        : `<span class="chip ok">Browser mode</span><span class="muted small">Simulations, source code and the Python programs all run on this page. Laptop-only extras (live WiFi scan, WLAN report, real TCP/UDP sockets): run <code>python webapp\\server.py</code> locally.</span>`}
         </div>
       </section>
       ${this.groups.map(g => `<h2>${g.title}</h2><div class="cards">${this.labs.filter(l => l.group === g.id).map(l => `
@@ -428,33 +474,67 @@ const App = {
       ${lab.result ? `<h2>Result</h2><p>${lab.result}</p>` : ""}</div>`;
   },
 
-  renderRun(lab, body) {
+  programs() {        // bundled copies of the lab programs (webapp/bundle.py)
+    if (!this._manifest) this._manifest = fetch("programs/manifest.json").then(r => {
+      if (!r.ok) throw new Error("Program files are not bundled - run  python webapp/bundle.py");
+      return r.json();
+    }).catch(e => { this._manifest = null; throw e; });
+    return this._manifest;
+  },
+
+  async renderRun(lab, body) {
+    // where "Run" happens: lab server > Python in the browser > recorded output > run it yourself
+    const mode = this.backend ? (lab.id === "tcpudp" ? "local" : "server") : lab.group === "signals" ? "pyodide" : lab.id === "beacon" ? "recorded" : "local";
+    const notes = {
+      server: lab.runNote || "Runs the program from your WCN folder on the lab server with the plot window switched off, then shows its console output and any figure it saved.",
+      pyodide: "Runs the original program <b>in your browser</b> with real Python (Pyodide + NumPy + Matplotlib). The first run downloads Python (about 15 MB). After that, runs are instant.",
+      recorded: "Shows the console output recorded when this program was run on <code>sample_beacons.pcap</code>. The Experiment tab parses any capture live in your browser.",
+      local: lab.id === "tcpudp" ? "These programs are interactive client/server scripts. The Experiment tab runs them for you. To use them across two laptops, download them and run them in a terminal:"
+        : "This program talks to your computer's WiFi / Bluetooth hardware, which a web browser is not allowed to access. Download it and run it on your laptop:",
+    };
     body.innerHTML = `
       <div class="panel">
-        <h3>Run the original Python program on the lab server</h3>
-        <p class="muted small">${lab.runNote || "Runs the program from your WCN folder with the plot window switched off, then shows its console output and any figure it saved."}</p>
-        <div class="row"><button class="btn" id="run-btn">▶ Run program</button><span id="run-meta" class="muted small"></span></div>
+        <h3>Run the original Python program</h3>
+        <p class="muted small">${notes[mode]}</p>
+        ${mode === "local" ? `<div class="file-tabs" id="dl"></div><div class="terminal" id="cmds"></div>`
+        : `<div class="row"><button class="btn" id="run-btn">▶ ${mode === "recorded" ? "Show recorded output" : "Run program"}</button><span id="run-meta" class="muted small"></span></div>`}
       </div>
-      <div class="terminal" id="run-out"><span class="dim">Output appears here.</span></div>
-      <div id="run-imgs"></div>`;
+      ${mode === "local" ? "" : `<div class="terminal" id="run-out"><span class="dim">Output appears here.</span></div><div id="run-imgs"></div>`}`;
+    if (mode === "local") {
+      try {
+        const m = (await this.programs())[lab.id];
+        $("#dl").innerHTML = m.files.map(f => `<a class="btn small ghost" href="programs/${f}" download>⬇ ${esc(f)}</a>`).join("");
+        $("#cmds").innerHTML = esc([`pip install ${lab.id === "bluetooth" ? "bleak winrt-Windows.Devices.Bluetooth winrt-Windows.Devices.Enumeration" : "numpy"}`, ...m.files.map(f => `python ${f.replaceAll("/", "\\")}`)].join("\n"));
+      } catch (e) { $("#cmds").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+      return;
+    }
     $("#run-btn").onclick = async () => {
       const btn = $("#run-btn"), out = $("#run-out");
+      const status = s => { out.innerHTML = `<span class="dim">${esc(s)}</span>`; };
       btn.disabled = true; btn.innerHTML = `<span class="spin"></span> Running…`;
-      out.innerHTML = `<span class="dim">Running…</span>`; $("#run-imgs").innerHTML = "";
+      status("Running…"); $("#run-imgs").innerHTML = "";
       try {
-        const r = await App.api("/api/run", { body: { lab: lab.id } });
-        out.innerHTML = `<span class="prompt">C:\\WCN&gt; ${esc(r.command)}</span>\n${esc(r.stdout)}${r.stderr ? `<span class="err">${esc(r.stderr)}</span>` : ""}\n<span class="dim">[process exited with code ${r.returncode} in ${r.seconds}s]</span>`;
+        let r;
+        if (mode === "server") r = await App.api("/api/run", { body: { lab: lab.id } });
+        else if (mode === "pyodide") r = await PyRunner.run((await this.programs())[lab.id].run, status);
+        else {
+          const res = await fetch(`programs/recorded/${lab.id}.json`);
+          if (!res.ok) throw new Error("No recorded output - run  python webapp/bundle.py");
+          r = await res.json();
+        }
+        out.innerHTML = `<span class="prompt">C:\\WCN&gt; ${esc(r.command)}</span>\n${esc(r.stdout)}${r.stderr ? `<span class="err">${esc(r.stderr)}</span>` : ""}\n<span class="dim">[process exited with code ${r.returncode} in ${r.seconds}s${r.recorded ? " · recorded output" : mode === "pyodide" ? " · Python in your browser" : ""}]</span>`;
         $("#run-meta").textContent = `exit ${r.returncode} · ${r.seconds}s`;
         $("#run-imgs").innerHTML = r.images.map(i => `<img class="run-img" alt="${esc(i.name)}" src="data:image/png;base64,${i.data}">`).join("");
       } catch (e) { out.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
-      btn.disabled = false; btn.textContent = "▶ Run again";
+      btn.disabled = false; btn.textContent = mode === "recorded" ? "▶ Show again" : "▶ Run again";
     };
   },
 
   async renderSource(lab, body) {
     body.innerHTML = `<div class="file-tabs" id="ftabs"></div><div class="code" id="code"><span class="ln">Loading…</span></div>`;
     try {
-      const { files } = await App.api(`/api/source?lab=${lab.id}`);
+      const files = this.backend ? (await App.api(`/api/source?lab=${lab.id}`)).files
+        : await Promise.all((await this.programs())[lab.id].files.map(async path => ({ path, code: await (await fetch(`programs/${path}`)).text() })));
       const show = i => {
         $$("#ftabs .btn").forEach((b, j) => b.classList.toggle("ghost", j !== i));
         $("#code").innerHTML = highlightPy(files[i].code);

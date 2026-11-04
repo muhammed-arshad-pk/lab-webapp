@@ -13,8 +13,6 @@ Endpoints
   POST /api/run        {lab}            run the original .py program, return stdout + plots
   GET  /api/wifi/scan                   nearby networks + RSSI analysis   (wifi_analyzer.py)
   GET  /api/wlan/report                 connected + nearby security info  (wlan_security_report.py)
-  GET  /api/beacon/sample               analyse sample_beacons.pcap       (beacon_analyzer.py)
-  POST /api/beacon/upload  <pcap bytes> analyse an uploaded capture
   POST /api/net/server/start {proto, port}   start a real TCP/UDP echo server
   POST /api/net/server/stop  {proto, port}
   POST /api/net/connect {host, port}          TCP client: 3-way handshake
@@ -172,78 +170,6 @@ def wlan_report():
                        "signal": max((b["signal"] for b in n["bss"]),
                                      key=lambda s: int(s.rstrip("%") or 0), default="?")})
     return {"connected": connected, "nearby": nearby}
-
-
-# ---------------------------------------------------------------------------
-# Beacon frames
-# ---------------------------------------------------------------------------
-FIXED_NAMES = {0: "SSID", 1: "Supported Rates", 3: "DS Parameter Set (channel)", 5: "TIM",
-               7: "Country", 42: "ERP", 45: "HT Capabilities", 48: "RSN (WPA2/WPA3)",
-               50: "Extended Supported Rates", 61: "HT Operation", 127: "Extended Capabilities",
-               191: "VHT Capabilities", 221: "Vendor Specific"}
-
-
-def dissect(raw):
-    """Byte-level field map of a radiotap + 802.11 beacon frame, for the hex view."""
-    fields = []
-    rt_len = int.from_bytes(raw[2:4], "little") if len(raw) > 4 and raw[0] == 0 else 0
-    if rt_len:
-        fields.append({"layer": "Radiotap", "name": "Radiotap header", "start": 0, "len": rt_len,
-                       "value": f"{rt_len} bytes (capture metadata: channel, signal dBm)"})
-    o = rt_len
-    mac = lambda b: ":".join(f"{x:02x}" for x in b)
-    hdr = [("Frame Control", 2, lambda b: f"0x{b.hex()} (type=Management, subtype=8 Beacon)"),
-           ("Duration", 2, lambda b: f"{int.from_bytes(b, 'little')} us"),
-           ("Addr1 / Destination", 6, mac), ("Addr2 / Source", 6, mac),
-           ("Addr3 / BSSID", 6, mac),
-           ("Sequence Control", 2, lambda b: f"seq {int.from_bytes(b, 'little') >> 4}")]
-    for name, n, fmt in hdr:
-        fields.append({"layer": "802.11 MAC header", "name": name, "start": o, "len": n,
-                       "value": fmt(raw[o:o + n])})
-        o += n
-    fixed = [("Timestamp", 8, lambda b: f"{int.from_bytes(b, 'little')} us"),
-             ("Beacon Interval", 2, lambda b: f"{int.from_bytes(b, 'little')} TU = "
-                                              f"{int.from_bytes(b, 'little') * 1.024:.1f} ms"),
-             ("Capability Info", 2, lambda b: f"0x{int.from_bytes(b, 'little'):04x}"
-                                              f"{' (Privacy=1)' if b[0] & 0x10 else ' (Privacy=0)'}")]
-    for name, n, fmt in fixed:
-        fields.append({"layer": "Fixed parameters", "name": name, "start": o, "len": n,
-                       "value": fmt(raw[o:o + n])})
-        o += n
-    while o + 2 <= len(raw):
-        eid, ln = raw[o], raw[o + 1]
-        info = raw[o + 2:o + 2 + ln]
-        if eid == 0:
-            val = repr(info.decode("utf-8", "replace"))
-        elif eid in (1, 50):
-            val = ", ".join(f"{(b & 0x7f) / 2:g}{'*' if b & 0x80 else ''}" for b in info) + " Mbps"
-        elif eid == 3 and info:
-            val = f"channel {info[0]}"
-        else:
-            val = info.hex(" ")
-        fields.append({"layer": "Tagged parameters",
-                       "name": f"Tag {eid}: {FIXED_NAMES.get(eid, 'Element')}",
-                       "start": o, "len": ln + 2, "value": val})
-        o += ln + 2
-    return fields
-
-
-def analyse_pcap(path):
-    from scapy.all import Dot11Beacon, rdpcap
-    ba = lab_module("beacon_analyzer")
-    beacons, aps = [], {}
-    for i, pkt in enumerate(rdpcap(path)):
-        if not pkt.haslayer(Dot11Beacon):
-            continue
-        b = ba.analyse_beacon(pkt)
-        raw = bytes(pkt)
-        b.update(index=i + 1, time=float(pkt.time), hex=raw.hex(), fields=dissect(raw))
-        beacons.append(b)
-        a = aps.setdefault(b["bssid"], {**{k: b[k] for k in ("ssid", "bssid", "channel", "security",
-                                                              "rates", "interval_tu", "interval_ms",
-                                                              "signal")}, "count": 0})
-        a["count"] += 1
-    return {"beacons": beacons[:500], "aps": list(aps.values()), "total": len(beacons)}
 
 
 # ---------------------------------------------------------------------------
@@ -466,17 +392,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(wifi_scan())
             if p == "/api/wlan/report":
                 return self.send_json(wlan_report())
-            if p == "/api/beacon/sample":
-                return self.send_json(analyse_pcap(
-                    os.path.join(WCN, "beacon_analyzer", "sample_beacons.pcap")))
-            if p == "/api/beacon/upload":
-                fd, path = tempfile.mkstemp(suffix=".pcap")
-                with os.fdopen(fd, "wb") as f:
-                    f.write(self.body())
-                try:
-                    return self.send_json(analyse_pcap(path))
-                finally:
-                    os.remove(path)
             if p == "/api/net/server/start":
                 b = self.json_body()
                 return self.send_json(server_start(b["proto"], int(b["port"])))

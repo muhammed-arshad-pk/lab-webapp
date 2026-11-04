@@ -307,7 +307,7 @@ Tagged elements          : ID (1) | Length (1) | Value …</div>
         <button class="btn" id="sample">📂 Load sample_beacons.pcap</button>
         <label class="btn ghost">⬆ Upload .pcap<input type="file" id="up" accept=".pcap,.pcapng,.cap" hidden></label>
         <span class="spacer"></span><span id="meta" class="muted small"></span></div></div>
-      <div id="bmsg">${App.backend ? `<div class="empty">Load a capture to begin.</div>` : `<div class="alert warn">The beacon analyser needs the lab server (it uses Scapy to read pcap files). Run <code>python webapp\\server.py</code>.</div>`}</div>
+      <div id="bmsg"><div class="empty">Load a capture to begin.</div></div>
       <div id="bout" hidden>
         <div class="panel"><h3>Summary: access points</h3><div class="tbl-wrap" id="aps"></div></div>
         <div class="panel"><h3>Packet list (beacon frames)</h3><div class="tbl-wrap" id="pkts" style="max-height:300px;overflow:auto"></div></div>
@@ -346,13 +346,17 @@ Tagged elements          : ID (1) | Length (1) | Value …</div>
       $$("#tree .fld", body).forEach(f => f.onmouseenter = () => hl(f.dataset.f));
       $$("#hex .b", body).forEach(b => b.onmouseenter = () => hl(b.dataset.o));
     };
-    const load = async (p) => {
-      $("#bmsg", body).innerHTML = `<div class="empty"><span class="spin"></span> Parsing capture with Scapy…</div>`;
-      try { show(await p); } catch (e) { $("#bmsg", body).innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; }
+    const load = async getBuf => {      // parsed in the browser (beacon-parser.js)
+      $("#bmsg", body).innerHTML = `<div class="empty"><span class="spin"></span> Parsing capture…</div>`;
+      try { show(Beacon.analyse(await getBuf())); } catch (e) { $("#bmsg", body).innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; $("#bout", body).hidden = true; }
     };
-    $("#sample", body).onclick = () => load(App.api("/api/beacon/sample"));
-    $("#up", body).onchange = async e => { const f = e.target.files[0]; if (f) load(App.api("/api/beacon/upload", { body: await f.arrayBuffer(), raw: true })); };
-    if (App.backend) $("#sample", body).click();
+    $("#sample", body).onclick = () => load(async () => {
+      const r = await fetch("programs/beacon_analyzer/sample_beacons.pcap");
+      if (!r.ok) throw new Error("Sample capture not found - run python webapp/bundle.py");
+      return r.arrayBuffer();
+    });
+    $("#up", body).onchange = e => { const f = e.target.files[0]; if (f) load(() => f.arrayBuffer()); };
+    $("#sample", body).click();
   },
 });
 
@@ -584,7 +588,9 @@ Reply  : OK / FAIL after the receiver checks the SHA-256 checksum</div>`,
     let step = 0, hopTimer = 0, hop = 0;
     body.innerHTML = `
       <div class="panel"><h3>1 · Device discovery (inquiry scan) <span class="spacer"></span><span id="mode"></span></h3>
-        <div class="row"><button class="btn" id="bscan">🔍 Scan</button><div style="width:220px">${UI.slider("timeout", "Scan time", 2, 15, 1, "s")}</div><span id="bmeta" class="muted small"></span></div>
+        <div class="row"><button class="btn" id="bscan">🔍 Scan</button><div style="width:220px">${UI.slider("timeout", "Scan time", 2, 15, 1, "s")}</div>
+          <button class="btn ghost" id="wble" hidden>🔗 Connect a real BLE device (Web Bluetooth)</button><span id="bmeta" class="muted small"></span></div>
+        ${App.backend ? "" : `<p class="small muted" style="margin:8px 0 0">Without the lab server, <b>Scan</b> shows demo devices. <b>Web Bluetooth</b> (Chrome / Edge) uses your real Bluetooth radio straight from the browser: pick a nearby BLE device and read its GATT services.</p>`}
         <div class="tbl-wrap" id="bdev" style="margin-top:12px"><div class="empty">Press Scan to discover nearby Bluetooth devices.</div></div></div>
       <div class="panel" id="binfo" hidden><h3>2 · Device information &amp; services</h3><div id="binfo-body"></div></div>
       <div class="panel"><h3>3 · Piconet simulator: RFCOMM chat &amp; file transfer</h3>
@@ -691,11 +697,51 @@ python bluetooth\\device_info.py                  python bluetooth\\device_info.
       try {
         const r = App.backend ? await App.api(`/api/bt/info?address=${encodeURIComponent(addr)}&ble=${ble ? 1 : 0}`)
           : { info: { "Device Name": "Mi Smart Band 7", "MAC Address": addr, "Device Type": "Bluetooth Low Energy - Watch (Appearance 0x00C0)" }, services: [{ uuid: "00001800-0000-1000-8000-00805f9b34fb", name: "Generic Access Profile", protocol: "L2CAP (CID 0x0004) -> ATT -> GATT", characteristics: ["Device Name [00002a00-…] (read)", "Appearance [00002a01-…] (read)"] }, { uuid: "0000180d-0000-1000-8000-00805f9b34fb", name: "Heart Rate", protocol: "L2CAP (CID 0x0004) -> ATT -> GATT", characteristics: ["Heart Rate Measurement [00002a37-…] (notify)"] }, { uuid: "0000180f-0000-1000-8000-00805f9b34fb", name: "Battery Service", protocol: "L2CAP (CID 0x0004) -> ATT -> GATT", characteristics: ["Battery Level [00002a19-…] (read, notify)"] }] };
-        bb.innerHTML = `<table class="tbl" style="margin-bottom:12px">${Object.entries(r.info).map(([k, v]) => `<tr><td style="width:180px">${esc(k)}</td><td><b>${esc(v)}</b></td></tr>`).join("")}</table>
-          <b class="small">Available services: ${r.services.length}</b>${r.services.map((s, i) => `<details class="viva" style="margin-top:8px" ${i < 3 ? "open" : ""}><summary>[${i + 1}] ${esc(s.name)}</summary><div><span class="mono small">UUID ${esc(s.uuid)}</span><br>Protocol: ${esc(s.protocol)}${s.profile ? `<br>Profile: ${esc(s.profile)}` : ""}${(s.characteristics || []).length ? `<ul>${s.characteristics.map(c => `<li class="mono small">${esc(c)}</li>`).join("")}</ul>` : ""}</div></details>`).join("")}`;
+        showInfo(r);
       } catch (e) { bb.innerHTML = `<div class="alert bad">${esc(e.message)}<br><span class="small">BLE devices must be advertising and connectable. Classic devices usually need to be paired first.</span></div>`; }
       btn.disabled = false;
     }
+    function showInfo(r) {
+      $("#binfo", body).hidden = false;
+      $("#binfo-body", body).innerHTML = `<table class="tbl" style="margin-bottom:12px">${Object.entries(r.info).map(([k, v]) => `<tr><td style="width:180px">${esc(k)}</td><td><b>${esc(v)}</b></td></tr>`).join("")}</table>
+        <b class="small">Available services: ${r.services.length}</b>${r.services.map((s, i) => `<details class="viva" style="margin-top:8px" ${i < 3 ? "open" : ""}><summary>[${i + 1}] ${esc(s.name)}</summary><div><span class="mono small">UUID ${esc(s.uuid)}</span><br>Protocol: ${esc(s.protocol)}${s.profile ? `<br>Profile: ${esc(s.profile)}` : ""}${(s.characteristics || []).length ? `<ul>${s.characteristics.map(c => `<li class="mono small">${esc(c)}</li>`).join("")}</ul>` : ""}</div></details>`).join("")}`;
+    }
+    // ---- Web Bluetooth: real BLE device, no server needed ----
+    const GATT_SVC = { 0x1800: "Generic Access Profile", 0x1801: "Generic Attribute Profile", 0x1802: "Immediate Alert", 0x1803: "Link Loss", 0x1804: "Tx Power", 0x1805: "Current Time", 0x1809: "Health Thermometer", 0x180a: "Device Information", 0x180d: "Heart Rate", 0x180f: "Battery Service", 0x1810: "Blood Pressure", 0x1816: "Cycling Speed and Cadence", 0x1818: "Cycling Power", 0x181a: "Environmental Sensing", 0x181c: "User Data", 0x181d: "Weight Scale", 0xfe95: "Xiaomi (vendor)", 0xfee0: "Mi Band (vendor)", 0xfee7: "Tencent (vendor)", 0xfe9f: "Google (vendor)" };
+    const GATT_CHR = { 0x2a00: "Device Name", 0x2a01: "Appearance", 0x2a04: "Preferred Connection Parameters", 0x2a05: "Service Changed", 0x2a19: "Battery Level", 0x2a24: "Model Number", 0x2a26: "Firmware Revision", 0x2a27: "Hardware Revision", 0x2a28: "Software Revision", 0x2a29: "Manufacturer Name", 0x2a37: "Heart Rate Measurement", 0x2a38: "Body Sensor Location" };
+    const shortId = u => /^0000[0-9a-f]{4}-0000-1000-8000-00805f9b34fb$/.test(u) ? parseInt(u.slice(4, 8), 16) : null;
+    const decodeVal = (id, v) => {
+      const b = new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+      if (id === 0x2a19) return `${b[0]}%`;
+      if ([0x2a00, 0x2a24, 0x2a26, 0x2a27, 0x2a28, 0x2a29].includes(id)) return `"${new TextDecoder().decode(b)}"`;
+      return [...b].map(x => x.toString(16).padStart(2, "0")).join(" ");
+    };
+    if (navigator.bluetooth) $("#wble", body).hidden = false;
+    $("#wble", body).onclick = async () => {
+      const btn = $("#wble", body);
+      try {
+        const dev = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: Object.keys(GATT_SVC).map(Number) });
+        btn.disabled = true; btn.innerHTML = `<span class="spin"></span> Connecting…`;
+        $("#binfo", body).hidden = false; $("#binfo-body", body).innerHTML = `<div class="empty"><span class="spin"></span> GATT connect to ${esc(dev.name || dev.id)}…</div>`;
+        const gatt = await dev.gatt.connect(), services = [];
+        for (const s of await gatt.getPrimaryServices()) {
+          const sid = shortId(s.uuid), chars = [];
+          for (const c of await s.getCharacteristics().catch(() => [])) {
+            const cid = shortId(c.uuid), p = c.properties;
+            const props = ["read", "write", "writeWithoutResponse", "notify", "indicate"].filter(k => p[k]);
+            let val = "";
+            if (p.read) try { val = " = " + decodeVal(cid, await c.readValue()); } catch { }
+            chars.push(`${GATT_CHR[cid] || "Unknown"} [${c.uuid}] (${props.join(", ")})${val}`);
+          }
+          services.push({ uuid: s.uuid, name: GATT_SVC[sid] || "Custom / vendor service", protocol: "L2CAP (CID 0x0004) -> ATT -> GATT", characteristics: chars });
+        }
+        gatt.disconnect();
+        showInfo({ info: { "Device Name": dev.name || "<unknown>", "Device ID": dev.id, "Device Type": "Bluetooth Low Energy (read via Web Bluetooth)" }, services });
+      } catch (e) {
+        if (e.name !== "NotFoundError") { $("#binfo", body).hidden = false; $("#binfo-body", body).innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; }
+      }
+      btn.disabled = false; btn.textContent = "🔗 Connect a real BLE device (Web Bluetooth)";
+    };
     UI.bind(body, S, () => { });
     return () => { clearInterval(hopTimer); hopPlot.destroy(); };
   },
