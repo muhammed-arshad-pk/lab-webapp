@@ -15,6 +15,7 @@ Endpoints
   GET  /api/wlan/report                 connected + nearby security info  (wlan_security_report.py)
   POST /api/net/server/start {proto, port}   start a real TCP/UDP echo server
   POST /api/net/server/stop  {proto, port}
+  POST /api/net/server/send  {proto, port, msg}  server -> its clients
   POST /api/net/connect {host, port}          TCP client: 3-way handshake
   POST /api/net/send    {proto, host, port, msg, sid}
   POST /api/net/close   {sid}
@@ -32,6 +33,7 @@ import json
 import mimetypes
 import os
 import platform
+import queue
 import shutil
 import socket
 import subprocess
@@ -173,11 +175,11 @@ def wlan_report():
 
 
 # ---------------------------------------------------------------------------
-# TCP / UDP lab - real sockets
+# TCP / UDP lab - real sockets, two-way
 # ---------------------------------------------------------------------------
 NET_LOG, NET_LOCK = [], threading.Lock()
-SERVERS = {}            # (proto, port) -> {"sock", "stop"}
-CLIENTS = {}            # sid -> socket
+SERVERS = {}            # (proto, port) -> {"sock", "stop", "peers": {addr: (conn, lock) | None}}
+CLIENTS = {}            # sid -> {"sock", "proto", "addr", "replies": Queue}
 
 
 def log(side, proto, kind, text, **extra):
@@ -186,8 +188,14 @@ def log(side, proto, kind, text, **extra):
                         "kind": kind, "text": text, **extra})
 
 
-def tcp_handle(conn, addr, port):
+def stamp():
+    return datetime.now().strftime("%H:%M:%S")
+
+
+def tcp_handle(conn, addr, port, peers):
     log("server", "TCP", "connect", f"[+] Connected: {addr[0]}:{addr[1]}", port=port)
+    lock = threading.Lock()                     # echo and server-push share the socket
+    peers[addr] = (conn, lock)
     total = 0
     try:
         with conn, conn.makefile("r", encoding="utf-8", newline="\n") as reader:
@@ -196,17 +204,19 @@ def tcp_handle(conn, addr, port):
                 total += len(line.encode())
                 log("server", "TCP", "recv", f"{addr[0]}:{addr[1]} -> {msg!r}", port=port,
                     bytes=len(line.encode()))
-                if msg.lower() == "exit":
-                    conn.sendall(b"BYE\n")
-                    break
-                conn.sendall(f"[server {datetime.now():%H:%M:%S}] echo: {msg}\n".encode())
+                with lock:
+                    if msg.lower() == "exit":
+                        conn.sendall(b"BYE\n")
+                        break
+                    conn.sendall(f"[server {stamp()}] echo: {msg}\n".encode())
     except OSError:
         pass
+    peers.pop(addr, None)
     log("server", "TCP", "disconnect",
         f"[-] Disconnected: {addr[0]}:{addr[1]} ({total} bytes received)", port=port)
 
 
-def tcp_server(sock, stop, port):
+def tcp_server(sock, stop, port, peers):
     while not stop.is_set():
         try:
             conn, addr = sock.accept()
@@ -214,11 +224,16 @@ def tcp_server(sock, stop, port):
             continue
         except OSError:
             break
-        threading.Thread(target=tcp_handle, args=(conn, addr, port), daemon=True).start()
+        threading.Thread(target=tcp_handle, args=(conn, addr, port, peers), daemon=True).start()
+    for conn, _ in list(peers.values()):      # shutdown() sends FIN even while a reader is blocked
+        try:
+            conn.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
     sock.close()
 
 
-def udp_server(sock, stop, port):
+def udp_server(sock, stop, port, peers):
     packets = 0
     while not stop.is_set():
         try:
@@ -228,17 +243,18 @@ def udp_server(sock, stop, port):
         except OSError:
             break
         packets += 1
+        peers[addr] = None                      # UDP has no connection: remember who wrote to us
         msg = data.decode("utf-8", "replace")
         log("server", "UDP", "recv", f"#{packets} {addr[0]}:{addr[1]} -> {msg!r} ({len(data)} bytes)",
             port=port, bytes=len(data))
-        sock.sendto(f"[server {datetime.now():%H:%M:%S}] echo: {msg}".encode(), addr)
+        sock.sendto(f"[server {stamp()}] echo: {msg}".encode(), addr)
     sock.close()
 
 
 def server_start(proto, port):
     key = (proto, port)
     if key in SERVERS:
-        return {"ok": True, "already": True}
+        return {"ok": True, "already": True, "ip": lan_ip()}
     kind = socket.SOCK_STREAM if proto == "TCP" else socket.SOCK_DGRAM
     sock = socket.socket(socket.AF_INET, kind)
     if proto == "TCP":
@@ -247,10 +263,10 @@ def server_start(proto, port):
     if proto == "TCP":
         sock.listen(5)
     sock.settimeout(0.5)
-    stop = threading.Event()
+    stop, peers = threading.Event(), {}
     target = tcp_server if proto == "TCP" else udp_server
-    threading.Thread(target=target, args=(sock, stop, port), daemon=True).start()
-    SERVERS[key] = {"sock": sock, "stop": stop}
+    threading.Thread(target=target, args=(sock, stop, port, peers), daemon=True).start()
+    SERVERS[key] = {"sock": sock, "stop": stop, "peers": peers}
     log("server", proto, "start", f"{proto} server listening on 0.0.0.0:{port} "
                                   f"(clients on the WLAN use {lan_ip()}:{port})", port=port)
     return {"ok": True, "ip": lan_ip()}
@@ -264,14 +280,72 @@ def server_stop(proto, port):
     return {"ok": True}
 
 
+def server_send(proto, port, msg):
+    """Server -> client: TCP to every connected client, UDP to every client that has written to us."""
+    s = SERVERS.get((proto, port))
+    if not s:
+        raise ConnectionError(f"{proto} server on port {port} is not running")
+    peers = list(s["peers"].items())
+    if not peers:
+        raise ConnectionError("No client connected yet" if proto == "TCP" else
+                              "No client known yet - a UDP server only learns a client's "
+                              "address when the client sends it a datagram first")
+    line = f"[server {stamp()}] says: {msg}"
+    for addr, peer in peers:
+        if proto == "TCP":
+            conn, lock = peer
+            with lock:
+                conn.sendall((line + "\n").encode())
+        else:
+            s["sock"].sendto(line.encode(), addr)
+        log("server", proto, "send", f"{addr[0]}:{addr[1]} <- {msg!r}", port=port)
+    return {"sent": len(peers)}
+
+
+def client_reader(sid, c):
+    """Background receive loop: echoes answer the pending send(), anything else is a server push."""
+    sock, proto = c["sock"], c["proto"]
+    try:
+        if proto == "TCP":
+            with sock.makefile("r", encoding="utf-8", newline="\n") as reader:
+                for line in reader:
+                    deliver(c, line.rstrip("\n"))
+        else:
+            while sid in CLIENTS:
+                try:
+                    data, _ = sock.recvfrom(4096)
+                except (socket.timeout, ConnectionResetError):
+                    continue
+                deliver(c, data.decode("utf-8", "replace"))
+    except (OSError, ValueError):
+        pass
+    c["replies"].put(None)                      # connection closed
+    if proto == "TCP" and CLIENTS.pop(sid, None):
+        log("client", "TCP", "close", "Server closed the connection.")
+
+
+def deliver(c, msg):
+    if "] echo: " in msg or msg == "BYE":
+        c["replies"].put(msg)
+    else:
+        log("client", c["proto"], "push", f"Server: {msg}")
+
+
+def new_client(proto, sock, addr):
+    sid = f"{proto[0].lower()}{int(time.time() * 1000) % 10 ** 8}"
+    c = CLIENTS[sid] = {"sock": sock, "proto": proto, "addr": addr, "replies": queue.Queue()}
+    threading.Thread(target=client_reader, args=(sid, c), daemon=True).start()
+    return sid
+
+
 def tcp_connect(host, port):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(5)
     t0 = time.perf_counter()
     sock.connect((host, port))
     ms = (time.perf_counter() - t0) * 1000
-    sid = f"c{int(time.time() * 1000) % 10 ** 8}"
-    CLIENTS[sid] = {"sock": sock, "reader": sock.makefile("r", encoding="utf-8", newline="\n")}
+    sock.settimeout(None)
+    sid = new_client("TCP", sock, (host, port))
     local = sock.getsockname()
     log("client", "TCP", "connect", f"Connected to {host}:{port} from {local[0]}:{local[1]} "
                                     f"(handshake {ms:.2f} ms)")
@@ -279,44 +353,50 @@ def tcp_connect(host, port):
 
 
 def net_send(proto, host, port, msg, sid=None):
-    if proto == "TCP":
-        c = CLIENTS.get(sid)
-        if not c:
-            raise ConnectionError("Not connected - press Connect first")
-        t0 = time.perf_counter()
-        c["sock"].sendall((msg + "\n").encode())
-        reply = c["reader"].readline()
-        rtt = (time.perf_counter() - t0) * 1000
-        if not reply or msg.lower() == "exit":
+    c = CLIENTS.get(sid)
+    if proto == "TCP" and not c:
+        raise ConnectionError("Not connected - press Connect first")
+    if proto == "UDP" and (not c or c["proto"] != "UDP" or c["addr"] != (host, port)):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)   # one socket per UDP session,
+        sock.bind(("0.0.0.0", 0))                                  # so the server can write back
+        sock.settimeout(0.5)
+        if c and c["proto"] == "UDP":
             net_close(sid)
-        return {"reply": reply.strip(), "rtt_ms": round(rtt, 3), "bytes": len(msg) + 1,
-                "closed": sid not in CLIENTS}
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(2)
+        sid = new_client("UDP", sock, (host, port))
+        c = CLIENTS[sid]
+    while not c["replies"].empty():             # drop late replies to earlier lost datagrams
+        c["replies"].get_nowait()
+    t0 = time.perf_counter()
+    if proto == "TCP":
+        c["sock"].sendall((msg + "\n").encode())
+    else:
+        c["sock"].sendto(msg.encode(), (host, port))
     try:
-        t0 = time.perf_counter()
-        sock.sendto(msg.encode(), (host, port))
-        try:
-            data, _ = sock.recvfrom(4096)
-            rtt = (time.perf_counter() - t0) * 1000
-            return {"reply": data.decode("utf-8", "replace"), "rtt_ms": round(rtt, 3),
-                    "bytes": len(msg.encode()), "local": "%s:%d" % sock.getsockname()}
-        except (socket.timeout, ConnectionResetError):
-            return {"reply": None, "lost": True, "bytes": len(msg.encode()),
-                    "note": "No reply within 2 s - UDP gives no delivery guarantee"}
-    finally:
-        sock.close()
+        reply = c["replies"].get(timeout=5 if proto == "TCP" else 2)
+    except queue.Empty:
+        if proto == "TCP":
+            raise TimeoutError("No reply from the server within 5 s")
+        return {"reply": None, "lost": True, "bytes": len(msg.encode()), "sid": sid,
+                "note": "No reply within 2 s - UDP gives no delivery guarantee"}
+    rtt = (time.perf_counter() - t0) * 1000
+    local = "%s:%d" % c["sock"].getsockname()
+    if proto == "TCP" and (reply is None or msg.lower() == "exit"):
+        net_close(sid)
+    return {"reply": reply or "", "rtt_ms": round(rtt, 3), "bytes": len(msg.encode()) + (proto == "TCP"),
+            "closed": sid not in CLIENTS, "sid": sid, "local": local}
 
 
 def net_close(sid):
     c = CLIENTS.pop(sid, None)
     if c:
         try:
-            c["reader"].close()
+            if c["proto"] == "TCP":
+                c["sock"].shutdown(socket.SHUT_RDWR)
             c["sock"].close()
         except OSError:
             pass
-        log("client", "TCP", "close", "Client closed connection (FIN)")
+        if c["proto"] == "TCP":
+            log("client", "TCP", "close", "Client closed connection (FIN)")
     return {"ok": True}
 
 
@@ -398,6 +478,9 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/net/server/stop":
                 b = self.json_body()
                 return self.send_json(server_stop(b["proto"], int(b["port"])))
+            if p == "/api/net/server/send":
+                b = self.json_body()
+                return self.send_json(server_send(b["proto"], int(b["port"]), b["msg"]))
             if p == "/api/net/servers":
                 return self.send_json({"servers": [f"{k[0]}:{k[1]}" for k in SERVERS], "ip": lan_ip()})
             if p == "/api/net/connect":

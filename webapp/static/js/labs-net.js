@@ -393,6 +393,7 @@ App.register({
     "In the client panel, choose TCP, enter the server IP (127.0.0.1 for this machine, or the LAN IP shown on another laptop) and press Connect. Note the handshake time.",
     "Send messages and note the echo reply and the RTT for each one. Send <code>exit</code> to close the connection.",
     "Start the UDP server on port 5001. Switch the client to UDP and send messages. Note that there is no connect step.",
+    "Type a message in the server panel and press <b>Send to client</b>. TCP can push data to a connected client at any time. A UDP server can only reply to a client after that client has sent it a datagram, because that is the only way it learns the client's address.",
     "Send a UDP message to a port with no server and observe the loss (no reply, no error from the network).",
     "Compare the average RTT and the behaviour of TCP and UDP in the statistics panel."],
   result: "TCP and UDP client–server communication was established over the WLAN. TCP needed a handshake and delivered every message reliably. UDP sent datagrams without a connection, with slightly lower RTT, but gave no delivery guarantee.",
@@ -405,13 +406,15 @@ App.register({
     ["When would you prefer UDP over TCP?", "When low latency matters more than reliability (VoIP, live video, games, DNS queries), or when the application implements its own reliability (QUIC)."],
     ["How does the server handle multiple TCP clients?", "accept() returns a new socket per client, and each is handled in its own thread, while the listening socket keeps accepting."]],
   experiment(body) {
-    const S = { sproto: "TCP", sport: 5000, cproto: "TCP", host: "127.0.0.1", cport: 5000, msg: "Hello from client" };
-    let sid = null, since = 0, poll = 0, arrows = [], rtts = [], hs = [], running = new Set(), sim = !App.backend, simSrvLog = [];
+    const S = { sproto: "TCP", sport: 5000, smsg: "Hello from server", cproto: "TCP", host: "127.0.0.1", cport: 5000, msg: "Hello from client" };
+    let sid = null, udpSid = null, since = 0, poll = 0, arrows = [], rtts = [], hs = [], running = new Set(), sim = !App.backend, simSrvLog = [];
+    let simTcpPort = null, simUdpKnown = new Set();      // simulation: which clients each server knows
     body.innerHTML = `
       <div class="grid2">
         <div class="panel"><h3>🖥 Server <span class="spacer"></span><span id="sstate" class="chip muted">stopped</span></h3>
           <div class="controls">${UI.select("sproto", "Protocol", ["TCP", "UDP"])}<label class="ctl"><span class="lbl">Port</span><input type="number" data-k="sport" min="1024" max="65535"></label></div>
           <div class="row" style="margin:10px 0"><button class="btn" id="sstart">▶ Start server</button><button class="btn ghost" id="sstop">■ Stop</button><span class="muted small" id="sip"></span></div>
+          <div class="row" style="margin-bottom:10px"><input type="text" data-k="smsg" style="flex:1" id="smsgin"><button class="btn" id="ssend">Send to client ➤</button></div>
           <div class="terminal short" id="slog"><span class="dim">Server console</span>\n</div></div>
         <div class="panel"><h3>💻 Client <span class="spacer"></span><span id="cstate" class="chip muted">idle</span></h3>
           <div class="controls">${UI.select("cproto", "Protocol", ["TCP", "UDP"])}${UI.text("host", "Server IP")}<label class="ctl"><span class="lbl">Port</span><input type="number" data-k="cport" min="1" max="65535"></label></div>
@@ -455,26 +458,51 @@ App.register({
     const simApi = {
       async start(p, port) { running.add(`${p}:${port}`); simSrvLog.push(`${p} server listening on 0.0.0.0:${port} [simulated]`); return { ip: "127.0.0.1" }; },
       async stop(p, port) { running.delete(`${p}:${port}`); simSrvLog.push(`${p} server on port ${port} stopped`); },
-      async connect(h, port) { await sleep(3); if (!running.has(`TCP:${port}`)) throw new Error(`[WinError 10061] No connection could be made because the target machine actively refused it`); simSrvLog.push(`[+] Connected: 127.0.0.1:${50000 + rtts.length}`); return { sid: "sim", handshake_ms: .2 + Math.random() * .4, local: "127.0.0.1:" + (50000 + rtts.length) }; },
+      async connect(h, port) { await sleep(3); if (!running.has(`TCP:${port}`)) throw new Error(`[WinError 10061] No connection could be made because the target machine actively refused it`); simTcpPort = port; simSrvLog.push(`[+] Connected: 127.0.0.1:${50000 + rtts.length}`); return { sid: "sim", handshake_ms: .2 + Math.random() * .4, local: "127.0.0.1:" + (50000 + rtts.length) }; },
       async send(p, h, port, msg) {
         const l = .1 + Math.random() * .5; await sleep(2);
         if (!running.has(`${p}:${port}`)) { if (p === "UDP") return { reply: null, lost: true, note: "No reply within 2 s - UDP gives no delivery guarantee" }; throw new Error("connection lost"); }
+        if (p === "UDP") simUdpKnown.add(port);
+        if (p === "TCP" && msg.toLowerCase() === "exit") simTcpPort = null;
         simSrvLog.push(`127.0.0.1 -> '${msg}'`); return { reply: msg.toLowerCase() === "exit" ? "BYE" : `[server ${new Date().toLocaleTimeString()}] echo: ${msg}`, rtt_ms: l, closed: msg.toLowerCase() === "exit" };
       },
-      async close() { simSrvLog.push("[-] Disconnected"); },
+      async close() { simTcpPort = null; simSrvLog.push("[-] Disconnected"); },
+      async serverSend(p, port, msg) {
+        if (!running.has(`${p}:${port}`)) throw new Error(`${p} server on port ${port} is not running`);
+        const known = p === "TCP" ? simTcpPort === port && sid : simUdpKnown.has(port);
+        if (!known) throw new Error(p === "TCP" ? "No client connected yet" : "No client known yet - a UDP server only learns a client's address when the client sends it a datagram first");
+        simSrvLog.push(`127.0.0.1 <- '${msg}'`);
+        setTimeout(() => onPush(p, `Server: [server ${new Date().toLocaleTimeString()}] says: ${msg}`), 5);
+        return { sent: 1 };
+      },
     };
     const api = sim ? simApi : {
       start: (p, port) => App.api("/api/net/server/start", { body: { proto: p, port } }),
       stop: (p, port) => App.api("/api/net/server/stop", { body: { proto: p, port } }),
       connect: (h, port) => App.api("/api/net/connect", { body: { host: h, port } }),
-      send: (p, h, port, msg) => App.api("/api/net/send", { body: { proto: p, host: h, port, msg, sid } }),
+      send: async (p, h, port, msg) => {
+        const r = await App.api("/api/net/send", { body: { proto: p, host: h, port, msg, sid: p === "TCP" ? sid : udpSid } });
+        if (p === "UDP") udpSid = r.sid;          // keep one UDP socket so the server can write back to it
+        return r;
+      },
       close: () => App.api("/api/net/close", { body: { sid } }),
+      serverSend: (p, port, msg) => App.api("/api/net/server/send", { body: { proto: p, port, msg } }),
     };
+    function onPush(proto, text) {               // message the server sent on its own
+      cli(text, "srv");
+      arrows.push({ dir: -1, label: proto === "TCP" ? "PSH,ACK  server → client" : "UDP datagram  server → client", proto, color: "--c4", fresh: true });
+      drawSeq();
+    }
     async function pollLog() {
       if (sim) { while (simSrvLog.length) tlog("#slog", "srv", simSrvLog.shift()); return; }
       try {
         const r = await App.api(`/api/net/log?since=${since}`);
-        r.events.forEach(e => { since = e.n + 1; if (e.side === "server") tlog("#slog", "srv", `${e.text}`); });
+        r.events.forEach(e => {
+          since = e.n + 1;
+          if (e.side === "server") tlog("#slog", "srv", `${e.text}`);
+          else if (e.kind === "push") onPush(e.proto, e.text);
+          else if (e.kind === "close" && e.text.startsWith("Server closed") && sid) { sid = null; cli(e.text, "dim"); arrow(-1, "FIN"); arrow(1, "ACK"); cliState(); }
+        });
       } catch { }
     }
     poll = setInterval(pollLog, 600);
@@ -485,6 +513,14 @@ App.register({
       catch (e) { tlog("#slog", "err", e.message); }
     };
     $("#sstop", body).onclick = async () => { await api.stop(S.sproto, S.sport).catch(() => { }); running.delete(`${S.sproto}:${S.sport}`); srvState(); pollLog(); };
+    const serverSend = async () => {
+      if (!S.smsg) return;
+      try { await api.serverSend(S.sproto, S.sport, S.smsg); }
+      catch (e) { tlog("#slog", "err", e.message); }
+      pollLog();
+    };
+    $("#ssend", body).onclick = serverSend;
+    $("#smsgin", body).onkeydown = e => { if (e.key === "Enter") serverSend(); };
     $("#conn", body).onclick = async () => {
       if (sid) return cli("Already connected.", "dim");
       try {
@@ -531,7 +567,11 @@ App.register({
       cliState(); if (k === "cport") drawSeq();
     });
     cliState(); srvState(); drawSeq(); stats();
-    return () => { clearInterval(poll); if (sid && !sim) App.api("/api/net/close", { body: { sid } }).catch(() => { }); rttPlot.destroy(); };
+    return () => {
+      clearInterval(poll);
+      if (!sim) for (const s of [sid, udpSid]) if (s) App.api("/api/net/close", { body: { sid: s } }).catch(() => { });
+      rttPlot.destroy();
+    };
   },
 });
 
